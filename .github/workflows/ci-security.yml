@@ -1,0 +1,39 @@
+# .github/workflows/ci-security.yml — the only security file each repository needs.
+# Calls the shared security template (niazhussain/template); override inputs per repository.
+name: security
+
+on:
+  pull_request:
+  push:
+    branches: [main]          # must be this repository's default branch, or no baseline is saved
+  schedule:
+    - cron: '0 3 * * 1'       # weekly: new CVEs against unchanged code; keeps the 90-day baseline fresh
+  workflow_dispatch:
+  # merge_group:              # uncomment if this repository uses a merge queue
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}   # never cancel a run that saves the baseline
+
+jobs:
+  security:
+    # Full commit SHA of the template release, never a tag. When the template's update branch is
+    # merged, replace this with the merge commit on main (and let Renovate/Dependabot bump it after).
+    uses: niazhussain/template/.github/workflows/security.yml@429a69620619a3f6fda50e5a8e29820cb602d4c5 # v2 (branch update)
+    permissions:              # upper bound for the template's jobs
+      contents: read
+      actions: read           # baseline download, CodeQL, Scorecard
+      issues: read            # Scorecard on private repos
+      pull-requests: read     # Scorecard on private repos
+      checks: read            # Scorecard on private repos
+      security-events: write  # CodeQL
+    with:
+      app-port: '3000'
+      health-path: /
+      check-headers: true     # web front-end; set false for APIs and libraries
+      max-critical: 0         # these three are the defaults; kept so the policy is visible here
+      max-high: 0
+      min-score: 80

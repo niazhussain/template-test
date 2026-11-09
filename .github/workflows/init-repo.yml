@@ -1,0 +1,93 @@
+# .github/workflows/init-repo.yml
+#
+# Runs in each repository created from this template ("Use this template"). It replaces these
+# placeholders in every tracked Markdown file with the new repository's own values:
+#
+#   {{REPO_NAME}}       my-service
+#   {{REPO_FULL_NAME}}  my-org/my-service
+#   {{REPO_OWNER}}      my-org
+#
+# and commits the result through the GitHub API (a GitHub-signed commit; no git credentials are
+# stored on the runner). It never touches the template repository itself: it is skipped there by
+# name (TEMPLATE_REPOSITORY below, so it holds even before "Template repository" is switched on)
+# and by the "Template repository" setting. It does nothing once the placeholders are gone, so
+# later pushes cost a few seconds. Delete this file once it has run.
+#
+# Set TEMPLATE_REPOSITORY to the full name of the repository that holds this template.
+name: init-repo
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:            # run it by hand if the first push didn't trigger it
+
+permissions: {}
+
+env:
+  TEMPLATE_REPOSITORY: niazhussain/repository-template   # the template itself is never filled in
+
+concurrency:
+  group: init-repo                # a push and a manual run must not update the same file at once
+  cancel-in-progress: false
+
+jobs:
+  init:
+    name: Fill in the repository name
+    if: github.event.repository.is_template != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write            # commit the filled-in Markdown files
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+
+      - name: Replace placeholders and commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          # Skip only in the template itself. Don't rely on the API's template_repository field: it
+          # comes back empty when the template is private, because this repository's token can't see it.
+          [[ "$TEMPLATE_REPOSITORY" =~ ^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$ ]] || { echo "::error::TEMPLATE_REPOSITORY is not set to owner/name"; exit 1; }
+          lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }     # GitHub names are case-insensitive
+          if [ "$(lower "$REPO")" = "$(lower "$TEMPLATE_REPOSITORY")" ]; then
+            echo "This is the template repository ($REPO): nothing to do."; exit 0
+          fi
+          if [ "$(gh api "repos/$REPO" --jq .is_template)" = true ]; then
+            echo "$REPO is marked as a template repository: nothing to do."; exit 0
+          fi
+          python3 -I - "$REPO" > "$RUNNER_TEMP/changed" <<'PY'
+          import os, re, subprocess, sys
+          repo = sys.argv[1]
+          if not re.fullmatch(r"[A-Za-z0-9-]+/[A-Za-z0-9._-]+", repo):
+              sys.exit(f"::error::unexpected repository name {repo!r}")
+          owner, name = repo.split("/")
+          values = {"{{REPO_FULL_NAME}}": repo, "{{REPO_NAME}}": name, "{{REPO_OWNER}}": owner}
+          files = subprocess.run(["git", "-c", "core.quotePath=false", "ls-files", "-z", "--", "*.md"],
+                                 check=True, capture_output=True).stdout.decode().split("\0")
+          for path in filter(None, files):
+              if os.path.islink(path) or not os.path.isfile(path):
+                  continue
+              with open(path, encoding="utf-8") as fh:
+                  text = fh.read()
+              new = text
+              for placeholder, value in values.items():
+                  new = new.replace(placeholder, value)
+              if new != text:
+                  with open(path, "w", encoding="utf-8") as fh:
+                      fh.write(new)
+                  print(path)
+          PY
+          if [ ! -s "$RUNNER_TEMP/changed" ]; then
+            echo "No placeholders left: already initialised."; exit 0
+          fi
+          while IFS= read -r path; do
+            sha="$(git rev-parse "HEAD:$path")"                          # current blob, required to update
+            url_path="$(jq -rn --arg p "$path" '$p | split("/") | map(@uri) | join("/")')"
+            jq -n --arg message "Fill in the repository name in $path" --arg sha "$sha" --arg branch "$BRANCH" \
+                  --rawfile content "$path" '{message: $message, sha: $sha, branch: $branch, content: ($content | @base64)}' \
+              | gh api --method PUT "repos/$REPO/contents/$url_path" --input - > /dev/null
+            echo "Updated $path"
+          done < "$RUNNER_TEMP/changed"

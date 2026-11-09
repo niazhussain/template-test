@@ -1,0 +1,13 @@
+# Changes to workflows and to scanner ignore files need a security review.
+# Effective once "Require review from Code Owners" is on for main (Settings → Rules).
+/.github/workflows/      @niazhussain
+/.github/CODEOWNERS      @niazhussain
+**/.gitleaks.toml        @niazhussain
+**/.gitleaksignore       @niazhussain
+**/.trivyignore*         @niazhussain
+**/trivy*.yaml           @niazhussain
+**/.semgrepignore        @niazhussain
+**/osv-scanner.toml      @niazhussain
+**/.hadolint.y*ml        @niazhussain
+**/zizmor.y*ml           @niazhussain
+**/.cargo/audit.toml     @niazhussain
